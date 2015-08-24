@@ -266,6 +266,7 @@ class HazardCalculator(BaseCalculator):
         extracted from the exposure.
         """
         inputs = self.oqparam.inputs
+        haz_mesh = readinput.get_mesh(self.oqparam)
         if 'exposure' in inputs:
             logging.info('Reading the exposure')
             with self.monitor('reading exposure', autoflush=True):
@@ -281,6 +282,9 @@ class HazardCalculator(BaseCalculator):
             elif 'gmfs' in inputs:
                 haz_sitecol = readinput.get_site_collection(self.oqparam)
             # TODO: think about the case hazard_curves in inputs
+            elif haz_mesh is not None:
+                haz_sitecol = readinput.get_site_collection(
+                    self.oqparam, haz_mesh)
             else:
                 haz_sitecol = None
             if haz_sitecol is not None and haz_sitecol != self.sitecol:
@@ -297,7 +301,8 @@ class HazardCalculator(BaseCalculator):
         else:  # no exposure
             logging.info('Reading the site collection')
             with self.monitor('reading site collection', autoflush=True):
-                self.sitecol = readinput.get_site_collection(self.oqparam)
+                self.sitecol = readinput.get_site_collection(
+                    self.oqparam, haz_mesh)
 
         # save mesh and asset collection
         self.save_mesh()
