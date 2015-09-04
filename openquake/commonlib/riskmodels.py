@@ -233,7 +233,7 @@ def get_imtls_from_vulnerabilities(inputs):
     return imtls
 
 
-############################ fragility ##################################
+# ########################### fragility ################################# #
 
 def get_fragility_functions(fname, continuous_fragility_discretization,
                             steps_per_interval=None):
@@ -310,7 +310,7 @@ def get_fragility_functions(fname, continuous_fragility_discretization,
 
         if lstates != limit_states:
             raise InvalidFile("Expected limit states %s, got %s in %s" %
-                             (limit_states, lstates, fname))
+                              (limit_states, lstates, fname))
 
     fragility_functions.damage_states = ['no_damage'] + limit_states
     return fragility_functions

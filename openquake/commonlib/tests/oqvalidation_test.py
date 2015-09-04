@@ -91,6 +91,17 @@ class OqParamTestCase(unittest.TestCase):
         oq.validate()
         self.assertEqual(list(oq.imtls.keys()), ['PGA'])
 
+    def test_small_imls(self):
+        oq = OqParam(
+            calculation_mode='event_based', inputs={},
+            intensity_measure_type='PGA',
+            sites='0.1 0.2', maximum_distance=400)
+        oq.risk_imtls = {'PGA': [0, 0.1, 0.2]}
+        with self.assertRaises(ValueError) as ctx:
+            oq.validate()
+        self.assertIn('The minimum IML must be larger than 0.001',
+                      str(ctx.exception))
+                      
     def test_missing_hazard_curves_from_gmfs(self):
         with self.assertRaises(ValueError) as ctx:
             OqParam(

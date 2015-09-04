@@ -947,11 +947,11 @@ def get_mesh_hcurves(oqparam):
             if lon_lat in lon_lats:
                 raise DuplicatedPoint(lon_lat)
             lon_lats.add(lon_lat)
-            for i, imt in enumerate(imtls, 1):
+            for i, imtype in enumerate(imtls, 1):
                 values = valid.decreasing_probabilities(row[i])
-                if len(values) != len(imtls[imt]):
+                if len(values) != len(imtls[imtype]):
                     raise ValueError('Found %d values, expected %d' %
-                                     (len(values), len(imtls([imt]))))
+                                     (len(values), len(imtls([imtype]))))
                 data += {imt: [numpy.array(values)]}
         except (ValueError, DuplicatedPoint) as err:
             raise err.__class__('%s: file %s, line %d' % (err, csvfile, line))

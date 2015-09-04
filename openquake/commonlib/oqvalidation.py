@@ -297,6 +297,19 @@ class OqParam(valid.ParamSet):
             ('classical', 'classical_tiling', 'disaggregation'))
         return not invalid
 
+    # ask the scientists: should this check moved into the validation
+    # of the vulnerability functions? this is nontrivial there because
+    # of the noDamageLimit logic
+    def is_valid_risk_imtls(self):
+        """
+        The minimum IML must be larger than 0.001: {risk_imtls}
+        """
+        if self.risk_imtls:
+            for imt, imls in self.risk_imtls.items():
+                if imls and imls[0] < 0.001:
+                    return False
+        return True
+
     def is_valid_sites_disagg(self):
         """
         The option `sites_disagg` (when given) requires `specific_assets` to
