@@ -529,6 +529,42 @@ def intensity_measure_types(value):
     return imts
 
 
+def integers(value):
+    """
+    :param value: input string
+    :returns: non-empty list of integers
+
+    >>> integers('1, 2')
+    [1, 2]
+    >>> integers(' ')
+    Traceback (most recent call last):
+       ...
+    ValueError: Not a list of integers: ' '
+    """
+    values = value.replace(',', ' ').split()
+    if not values:
+        raise ValueError('Not a list of integers: %r' % value)
+    try:
+        ints = map(int, values)
+    except:
+        raise ValueError('Not a list of integers: %r' % value)
+    return ints
+
+
+def positiveints(value):
+    """
+    >>> positiveints('1, -1')
+    Traceback (most recent call last):
+       ...
+    ValueError: -1 is negative in '1, -1'
+    """
+    ints = integers(value)
+    for val in ints:
+        if val < 0:
+            raise ValueError('%d is negative in %r' % (val, value))
+    return ints
+
+
 def check_levels(imls, imt):
     """
     Raise a ValueError if the given levels are invalid.
