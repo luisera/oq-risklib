@@ -430,15 +430,12 @@ class RiskInputFromRuptures(object):
         """
         assets, hazards, epsilons = [], [], []
         gmfs = self.compute_expand_gmfs()
-        gsims = list(map(str, self.gsims))
-        trt_id = rlzs_assoc.csm_info.get_trt_id(self.col_id)
+        rlz_gsims = rlzs_assoc.get_rlz_gsims(self.col_id)
         for assets_, hazard in zip(assets_by_site, gmfs.T):
             haz_by_imt_rlz = {imt: {} for imt in self.imts}
-            for gsim in gsims:
+            for rlz, gsim in rlz_gsims:
                 for imt in self.imts:
-                    for rlz in rlzs_assoc[trt_id, gsim]:
-                        if self.col_id in rlzs_assoc.get_col_ids(rlz):
-                            haz_by_imt_rlz[imt][rlz] = hazard[gsim][imt]
+                    haz_by_imt_rlz[imt][rlz] = hazard[str(gsim)][imt]
             for asset in assets_:
                 assets.append(asset)
                 hazards.append(haz_by_imt_rlz)

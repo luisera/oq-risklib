@@ -280,6 +280,8 @@ class RlzsAssoc(collections.Mapping):
         self.gsim_by_trt = []  # rlz.ordinal -> {trt: gsim}
         self.rlzs_by_smodel = [[] for _ in range(len(csm_info.source_models))]
         self.gsims_by_trt_id = {}
+        # col_id -> {rlz: gsim}
+        self.gsims_by_col_id = collections.defaultdict(dict)
         self.col_ids_by_rlz = collections.defaultdict(set)
 
     @property
@@ -299,6 +301,13 @@ class RlzsAssoc(collections.Mapping):
         # TODO: add a special case for sampling?
         return [self.gsims_by_trt_id.get(col['trt_id'], [])
                 for col in self.csm_info.cols]
+
+    def get_rlz_gsims(self, col_id):
+        """
+        :param col_id: a SES Collection ID
+        :returns: an ordered list (rlz, gsim)
+        """
+        return sorted(self.gsims_by_col_id[col_id].items())
 
     # this useful to extract the ruptures affecting a given realization
     def get_col_ids(self, rlz):
@@ -324,13 +333,16 @@ class RlzsAssoc(collections.Mapping):
             self.gsim_by_trt.append(dict(
                 zip(gsim_lt.all_trts, gsim_rlz.value)))
             for trt_model in lt_model.trt_models:
+                if lt_model.samples > 1:  # oversampling
+                    col_id = self.csm_info.col_ids_by_trt_id[trt_model.id][i]
+                    self.col_ids_by_rlz[rlz].add(col_id)
+                else:
+                    col_id = trt_model.id
                 if trt_model.trt in trts:
                     # ignore the associations to discarded TRTs
                     gs = gsim_lt.get_gsim_by_trt(gsim_rlz, trt_model.trt)
                     self.rlzs_assoc[trt_model.id, gs].append(rlz)
-                if lt_model.samples > 1:  # oversampling
-                    col_id = self.csm_info.col_ids_by_trt_id[trt_model.id][i]
-                    self.col_ids_by_rlz[rlz].add(col_id)
+                    self.gsims_by_col_id[col_id][rlz] = gs
             idx += 1
             rlzs.append(rlz)
         self.rlzs_by_smodel[lt_model.ordinal] = rlzs
