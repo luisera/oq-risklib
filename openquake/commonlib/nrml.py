@@ -153,6 +153,7 @@ class ValidNode(LiteralNode):
         weight=valid.probability,
         alongStrike=valid.probability,
         downDip=valid.probability,
+        id=valid.simple_id,
         )
 
 
@@ -173,6 +174,7 @@ def float_or_flag(value, isAbsolute=None):
 @nodefactory.add('exposureModel')
 class ExposureDataNode(LiteralNode):
     validators = dict(
+        id=valid.simple_id,
         description=valid.utf8,
         name=valid.name,
         type=valid.name,
@@ -224,7 +226,7 @@ class FragilityNode(LiteralNode):
         description=valid.utf8,
         type=valid.ChoiceCI('lognormal'),
         poEs=valid.probabilities,
-        noDamageLimit=valid.positivefloat,
+        noDamageLimit=valid.NoneOr(valid.positivefloat),
     )
 
 valid_loss_types = valid.Choice('structural', 'nonstructural', 'contents',
@@ -324,7 +326,8 @@ def read(source, chatty=True):
     # extract the XML namespace URL ('http://openquake.org/xmlns/nrml/0.5')
     xmlns = nrml.tag.split('}')[0][1:]
     if xmlns != NRML05 and chatty:
-        logging.warn('%s is at an outdated version: %s', source, xmlns)
+        # for the moment NRML04 is still supported, so we hide the warning
+        logging.debug('%s is at an outdated version: %s', source, xmlns)
     subnodes = []
     for elem in nrml:
         nodecls = nodefactory[striptag(elem.tag)]
@@ -363,7 +366,7 @@ def read_lazy(source, lazytags):
     return nodes
 
 
-def write(nodes, output=sys.stdout, fmt='%8.4E'):
+def write(nodes, output=sys.stdout, fmt='%10.7E'):
     """
     Convert nodes into a NRML file. output must be a file
     object open in write mode. If you want to perform a

@@ -6,7 +6,8 @@ from __future__ import print_function
 import os
 
 from openquake.commonlib import readinput, datastore
-from openquake.commonlib.calculators import base
+from openquake.calculators import base, views
+from openquake.commonlib.oqvalidation import OqParam
 
 
 def indent(text):
@@ -28,7 +29,7 @@ class ReportWriter(object):
     )
 
     def __init__(self, dstore):
-        description = dstore['oqparam'].description
+        description = OqParam.from_(dstore.attrs).description
         self.dstore = dstore
         self.text = description + '\n' + '=' * len(description)
 
@@ -39,7 +40,10 @@ class ReportWriter(object):
         if obj:
             text = '\n::\n\n' + indent(str(obj))
         else:
+            orig = views.rst_table.__defaults__
+            views.rst_table.__defaults__ = (None, '%s')  # disable formatting
             text = datastore.view(name, self.dstore)
+            views.rst_table.__defaults__ = orig
         self.text += '\n'.join(['\n\n' + title, line, text])
 
     def save(self, fname):
@@ -61,6 +65,7 @@ def build_report(job_ini, output_dir=None):
     output_dir = output_dir or os.path.dirname(job_ini)
     calc = base.calculators(oq)
     calc.pre_execute()
+    calc.save_params()
     ds = datastore.DataStore(calc.datastore.calc_id)
     rw = ReportWriter(ds)
     report = os.path.join(output_dir, 'report.rst')
@@ -72,7 +77,7 @@ def build_report(job_ini, output_dir=None):
     if 'num_ruptures' in ds:
         rw.add('rupture_collections')
         rw.add('col_rlz_assocs')
-    if oq.calculation_mode in ('classical', 'event_based', 'ebr'):
+    if oq.calculation_mode in ('classical', 'event_based', 'event_based_risk'):
         rw.add('data_transfer')
     rw.save(report)
     return report
@@ -81,7 +86,7 @@ def build_report(job_ini, output_dir=None):
 def main(directory):
     for cwd, dirs, files in os.walk(directory):
         for f in files:
-            if f in ('job.ini', 'job_haz.ini', 'job_hazard.ini'):
+            if f in ('job.ini', 'job_h.ini', 'job_haz.ini', 'job_hazard.ini'):
                 job_ini = os.path.join(cwd, f)
                 print(job_ini)
                 build_report(job_ini)

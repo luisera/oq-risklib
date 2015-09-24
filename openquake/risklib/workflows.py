@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU Affero General Public
 # License along with OpenQuake Risklib. If not, see
 # <http://www.gnu.org/licenses/>.
-
+from __future__ import division
 import sys
 import inspect
 import functools
@@ -26,8 +26,57 @@ from openquake.baselib.general import CallableDict
 from openquake.commonlib import valid
 from openquake.risklib import utils, scientific
 
-
 registry = CallableDict()
+
+
+class CostCalculator(object):
+    """
+    Return the value of an asset for the given loss type depending
+    on the cost types declared in the exposure, as follows:
+
+        case 1: cost type: aggregated:
+            cost = economic value
+        case 2: cost type: per asset:
+            cost * number (of assets) = economic value
+        case 3: cost type: per area and area type: aggregated:
+            cost * area = economic value
+        case 4: cost type: per area and area type: per asset:
+            cost * area * number = economic value
+
+    The same "formula" applies to retrofitting cost.
+    """
+    def __init__(self, cost_types, area_types,
+                 deduct_abs=True, limit_abs=True):
+        for ct in cost_types.values():
+            assert ct in ('aggregated', 'per_asset', 'per_area'), ct
+        for at in area_types.values():
+            assert at in ('aggregated', 'per_asset'), at
+        self.cost_types = cost_types
+        self.area_types = area_types
+        self.deduct_abs = deduct_abs
+        self.limit_abs = limit_abs
+
+    def __call__(self, loss_type, values, area, number):
+        cost = values[loss_type]
+        if cost is None:
+            return numpy.nan
+        cost_type = self.cost_types[loss_type]
+        if cost_type == "aggregated":
+            return cost
+        if cost_type == "per_asset":
+            return cost * number
+        if cost_type == "per_area":
+            area_type = self.area_types[loss_type]
+            if area_type == "aggregated":
+                return cost * area
+            elif area_type == "per_asset":
+                return cost * area * number
+        # this should never happen
+        raise RuntimeError('Unable to compute cost')
+
+costcalculator = CostCalculator(
+    cost_types=dict(structural='per_area'),
+    area_types=dict(structural='per_asset'))
 
 
 class Asset(object):
@@ -51,7 +100,7 @@ class Asset(object):
                  deductibles=None,
                  insurance_limits=None,
                  retrofitting_values=None,
-                 aggregated=None,
+                 calc=costcalculator,
                  idx=None):
         """
         :param asset_id:
@@ -72,8 +121,8 @@ class Asset(object):
             the value of the asset) keyed by loss types
         :param dict retrofitting_values:
             asset retrofitting values keyed by loss types
-        :param dict aggregated:
-            if the cost is aggregated, do not multiply by the number
+        :param calc:
+            cost calculator instance
         :param idx:
             asset collection index
         """
@@ -86,8 +135,9 @@ class Asset(object):
         self.retrofitting_values = retrofitting_values
         self.deductibles = deductibles
         self.insurance_limits = insurance_limits
-        self.aggregated = aggregated or {}
+        self.calc = calc
         self.idx = idx
+        self._cost = {}  # cache for the costs
 
     def value(self, loss_type, time_event=None):
         """
@@ -95,28 +145,44 @@ class Asset(object):
         """
         if loss_type == 'fatalities':
             return self.values['fatalities_' + str(time_event)]
-        value = self.values[loss_type]
-        number = 1 if self.aggregated.get(loss_type) else self.number
-        return numpy.nan if value is None else value * number * self.area
+        try:
+            val = self._cost[loss_type]
+        except KeyError:
+            val = self.calc(loss_type, self.values, self.area, self.number)
+            self._cost[loss_type] = val
+        return val
 
     def deductible(self, loss_type):
         """
-        :returns: the deductible of the asset for `loss_type`
+        :returns: the deductible fraction of the asset cost for `loss_type`
         """
-        return self.deductibles[loss_type]
+        val = self.calc(loss_type, self.deductibles, self.area, self.number)
+        if self.calc.deduct_abs:  # convert to relative value
+            return val / self.calc(loss_type, self.values,
+                                   self.area, self.number)
+        else:
+            return val
 
     def insurance_limit(self, loss_type):
         """
-        :returns: the deductible of the asset for `loss_type`
+        :returns: the limit fraction of the asset cost for `loss_type`
         """
+        val = self.calc(loss_type, self.insurance_limits, self.area,
+                        self.number)
+        if self.calc.limit_abs:  # convert to relative value
+            return val / self.calc(loss_type, self.values,
+                                   self.area, self.number)
+        else:
+            return val
 
-        return self.insurance_limits[loss_type]
-
-    def retrofitted(self, loss_type):
+    def retrofitted(self, loss_type, time_event=None):
         """
         :returns: the asset retrofitted value for `loss_type`
         """
-        return self.retrofitting_values[loss_type]
+        if loss_type == 'fatalities':
+            return self.values['fatalities_' + str(time_event)]
+        return self.calc(loss_type, self.retrofitting_values,
+                         self.area, self.number)
 
     def __repr__(self):
         return '<Asset %s>' % self.id
@@ -155,7 +221,8 @@ def out_by_rlz(workflow, assets, hazards, epsilons, tags, loss_type):
     Yield lists out_by_rlz
     """
     out_by_rlz = List()
-    for rlz in hazards[0]:  # extract the realizations from the first asset
+    # extract the realizations from the first asset
+    for rlz in sorted(hazards[0]):
         hazs = [haz[rlz] for haz in hazards]  # hazard per each asset
         out = workflow(loss_type, assets, hazs, epsilons, tags)
         out.hid = rlz.ordinal
@@ -378,7 +445,7 @@ class Classical(Workflow):
         return all_outputs
 
 
-@registry.add('event_based_risk', 'ebr')
+@registry.add('event_based_risk')
 class ProbabilisticEventBased(Workflow):
     """
     Implements the Probabilistic Event Based workflow
@@ -439,15 +506,15 @@ class ProbabilisticEventBased(Workflow):
         of the input parameters.
         """
         time_span = risk_investigation_time or investigation_time
-        tses = (time_span * ses_per_logic_tree_path * (
-            number_of_logic_tree_samples or 1))
+        self.ses_ratio = time_span / (
+            investigation_time * ses_per_logic_tree_path)
         self.imt = imt
         self.taxonomy = taxonomy
         self.risk_functions = vulnerability_functions
         self.loss_curve_resolution = loss_curve_resolution
         self.curves = functools.partial(
             scientific.event_based, curve_resolution=loss_curve_resolution,
-            time_span=time_span, tses=tses)
+            ses_ratio=self.ses_ratio)
         self.conditional_loss_poes = conditional_loss_poes
         self.insured_losses = insured_losses
         self.return_loss_matrix = True
@@ -492,52 +559,35 @@ class ProbabilisticEventBased(Workflow):
             `openquake.risklib.scientific.ProbabilisticEventBased.Output`
             instance.
         """
+        n = len(assets)
         loss_matrix = self.risk_functions[loss_type].apply_to(
             ground_motion_values, epsilons)
+        # sum on ruptures; compute the fractional losses
+        average_losses = loss_matrix.sum(axis=1) * self.ses_ratio
         values = get_values(loss_type, assets)
         ela = loss_matrix.T * values  # matrix with T x N elements
         if self.insured_losses and loss_type != 'fatalities':
-            deductibles = [a.deductible(loss_type) for a in assets]
-            limits = [a.insurance_limit(loss_type) for a in assets]
-            ila = utils.numpy_map(
+            deductibles = numpy.array(
+                [a.deductible(loss_type) for a in assets])
+            limits = numpy.array(
+                [a.insurance_limit(loss_type) for a in assets])
+            ilm = utils.numpy_map(
                 scientific.insured_losses, loss_matrix, deductibles, limits)
-        else:  # build a zero matrix of size T x N
-            ila = numpy.zeros((len(ground_motion_values[0]), len(assets)))
-        if isinstance(assets[0].id, str):
-            # in oq-lite return early, with just the losses per asset
-            cb = self.riskmodel.curve_builders[self.riskmodel.lti[loss_type]]
-            return scientific.Output(
-                assets, loss_type,
-                event_loss_per_asset=ela,
-                insured_loss_per_asset=ila,
-                counts_matrix=cb.build_counts(loss_matrix),
-                insured_counts_matrix=cb.build_counts(ila),
-                tags=event_ids)
-
-        # in the engine, compute more stuff on the workers
-        curves = utils.numpy_map(self.curves, loss_matrix)
-        average_losses = utils.numpy_map(scientific.average_loss, curves)
-        stddev_losses = numpy.std(loss_matrix, axis=1)
-        maps = scientific.loss_map_matrix(self.conditional_loss_poes, curves)
-        elt = self.event_loss(ela, event_ids)
-
-        if self.insured_losses and loss_type != 'fatalities':
-            insured_curves = utils.numpy_map(self.curves, ila)
-            average_insured_losses = utils.numpy_map(
-                scientific.average_loss, insured_curves)
-            stddev_insured_losses = numpy.std(ila, axis=1)
-        else:
-            insured_curves = None
-            average_insured_losses = None
-            stddev_insured_losses = None
+        else:  # build a NaN matrix of size N x T
+            ilm = numpy.empty((n, len(ground_motion_values[0])))
+            ilm.fill(numpy.nan)
+        ila = ilm.T * values
+        average_insured_losses = ilm.sum(axis=1) * self.ses_ratio
+        cb = self.riskmodel.curve_builders[self.riskmodel.lti[loss_type]]
         return scientific.Output(
             assets, loss_type,
-            loss_matrix=loss_matrix if self.return_loss_matrix else None,
-            loss_curves=curves, average_losses=average_losses,
-            stddev_losses=stddev_losses, insured_curves=insured_curves,
+            event_loss_per_asset=ela,
+            insured_loss_per_asset=ila,
+            average_losses=average_losses,
             average_insured_losses=average_insured_losses,
-            stddev_insured_losses=stddev_insured_losses,
-            loss_maps=maps, event_loss_table=elt)
+            counts_matrix=cb.build_counts(loss_matrix),
+            insured_counts_matrix=cb.build_counts(ilm),
+            tags=event_ids)
 
     def compute_all_outputs(self, getter, loss_type):
         """

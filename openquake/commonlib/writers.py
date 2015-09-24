@@ -14,6 +14,7 @@
 # along with NRML.  If not, see <http://www.gnu.org/licenses/>.
 
 import io
+import types
 import logging
 from contextlib import contextmanager
 from xml.sax.saxutils import escape, quoteattr
@@ -144,6 +145,10 @@ class StreamingXMLWriter(object):
 
     def serialize(self, node):
         """Serialize a node object (typically an ElementTree object)"""
+        if isinstance(node.tag, types.FunctionType):
+            # this looks like a bug of ElementTree: comments are stored as
+            # functions!?? see https://hg.python.org/sandbox/python2.7/file/tip/Lib/xml/etree/ElementTree.py#l458
+            return
         if self.nsmap is not None:
             tag = self.shorten(node.tag)
         else:
@@ -169,7 +174,7 @@ class StreamingXMLWriter(object):
         pass
 
 
-def tostring(node, indent=4):
+def tostring(node, indent=4, nsmap=None):
     """
     Convert a node into an XML string by using the StreamingXMLWriter.
     This is useful for testing purposes.
@@ -178,7 +183,7 @@ def tostring(node, indent=4):
     :param indent: the indentation to use in the XML (default 4 spaces)
     """
     out = io.BytesIO()
-    writer = StreamingXMLWriter(out, indent)
+    writer = StreamingXMLWriter(out, indent, nsmap=nsmap)
     writer.serialize(node)
     return out.getvalue()
 
@@ -248,13 +253,16 @@ def extract_from(data, fields):
 
 def write_csv(dest, data, sep=',', fmt='%12.8E', header=None):
     """
-    :param dest: destination filename
+    :param dest: destination filename or io.StringIO instance
     :param data: array to save
     :param sep: separator to use (default comma)
     :param fmt: formatting string (default '%12.8E')
     :param header:
        optional list with the names of the columns to display
     """
+    if not hasattr(dest, 'getvalue'):
+        # not a StringIO, assume dest is a filename
+        dest = open(dest, 'w')
     if len(data) == 0:
         logging.warn('Not generating %s, it would be empty', dest)
         return dest
@@ -263,22 +271,40 @@ def write_csv(dest, data, sep=',', fmt='%12.8E', header=None):
         data.dtype.fields
     except AttributeError:
         # not a composite array
-        header = header or []
+        autoheader = []
     else:
-        header = header or build_header(data.dtype)
-    with open(dest, 'w') as f:
-        if header:
-            f.write(sep.join(header) + '\n')
-            all_fields = [col.split(':', 1)[0].split('-')
-                          for col in header]
-            for record in data:
-                row = []
-                for fields in all_fields:
-                    row.append(extract_from(record, fields))
-                f.write(sep.join(scientificformat(col, fmt)
-                                 for col in row) + '\n')
-        else:
-            for row in data:
-                f.write(sep.join(scientificformat(col, fmt)
-                                 for col in row) + '\n')
-    return dest
+        autoheader = build_header(data.dtype)
+
+    someheader = header or autoheader
+    if someheader:
+        dest.write(sep.join(someheader) + u'\n')
+
+    if autoheader:
+        all_fields = [col.split(':', 1)[0].split('-')
+                      for col in autoheader]
+        for record in data:
+            row = []
+            for fields in all_fields:
+                row.append(extract_from(record, fields))
+            dest.write(sep.join(scientificformat(col, fmt)
+                                for col in row) + u'\n')
+    else:
+        for row in data:
+            dest.write(sep.join(scientificformat(col, fmt)
+                                for col in row) + u'\n')
+    if hasattr(dest, 'getvalue'):
+        return dest.getvalue()[:-1]  # a newline is strangely added
+    else:
+        dest.close()
+    return dest.name
+
+if __name__ == '__main__':  # pretty print of NRML files
+    import sys
+    import shutil
+    from openquake.commonlib import nrml
+    nrmlfiles = sys.argv[1:]
+    for fname in nrmlfiles:
+        node = nrml.read(fname)
+        shutil.copy(fname, fname + '.bak')
+        with open(fname, 'w') as out:
+            nrml.write(list(node), out)

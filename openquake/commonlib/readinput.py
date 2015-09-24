@@ -19,7 +19,6 @@
 import os
 import csv
 import gzip
-import codecs
 import zipfile
 import logging
 import operator
@@ -164,7 +163,7 @@ def get_oqparam(job_ini, pkg=None, calculators=None, hc_id=None):
         the parameter name.
     """
     # UGLY: this is here to avoid circular imports
-    from openquake.commonlib.calculators import base
+    from openquake.calculators import base
 
     OqParam.calculation_mode.validator.choices = tuple(
         calculators or base.calculators)
@@ -201,7 +200,9 @@ def get_mesh(oqparam):
         firstpoint = geo.Point(*oqparam.region[0])
         points = [geo.Point(*xy) for xy in oqparam.region] + [firstpoint]
         try:
-            return geo.Polygon(points).discretize(oqparam.region_grid_spacing)
+            mesh = geo.Polygon(points).discretize(oqparam.region_grid_spacing)
+            lons, lats = zip(*sorted(zip(mesh.lons, mesh.lats)))
+            return geo.Mesh(numpy.array(lons), numpy.array(lats))
         except:
             raise ValueError(
                 'Could not discretize region %(region)s with grid spacing '
@@ -361,10 +362,8 @@ def get_source_model_lt(oqparam):
         instance
     """
     fname = oqparam.inputs['source_model_logic_tree']
-    content = codecs.open(fname, encoding='utf8').read().encode('utf8')
     return logictree.SourceModelLogicTree(
-        content, oqparam.base_path, fname, validate=False,
-        seed=oqparam.random_seed,
+        fname, validate=False, seed=oqparam.random_seed,
         num_samples=oqparam.number_of_logic_tree_samples)
 
 
@@ -606,7 +605,10 @@ def get_risk_model(oqparam):
     riskmodel.make_curve_builders(oqparam)
     for workflow in risk_models.values():
         workflow.riskmodel = riskmodel
-
+        # save the number of nonzero coefficients of variation
+        for vf in workflow.risk_functions.values():
+            if hasattr(vf, 'covs') and vf.covs.any():
+                riskmodel.covs += 1
     return riskmodel
 
 # ########################### exposure ############################ #
@@ -635,11 +637,11 @@ def get_exposure_lazy(fname):
     try:
         inslimit = conversions.insuranceLimit
     except NameError:
-        inslimit = LiteralNode('insuranceLimit')
+        inslimit = LiteralNode('insuranceLimit', text=True)
     try:
         deductible = conversions.deductible
     except NameError:
-        deductible = LiteralNode('deductible')
+        deductible = LiteralNode('deductible', text=True)
     try:
         area = conversions.area
     except NameError:
@@ -669,22 +671,20 @@ def get_exposure(oqparam):
         region = None
     fname = oqparam.inputs['exposure']
     exposure, assets_node = get_exposure_lazy(fname)
-    aggregated = {
-        ct['name']: (ct['type'] == 'aggregated' or
-                     exposure.area['type'] == 'aggregated')
-        for ct in exposure.cost_types}
+    cc = workflows.CostCalculator(
+        {}, {}, exposure.deductible_is_absolute,
+        exposure.insurance_limit_is_absolute)
+    for ct in exposure.cost_types:
+        name = ct['name']  # structural, nonstructural, ...
+        cc.cost_types[name] = ct['type']  # aggregated, per_asset, per_area
+        cc.area_types[name] = exposure.area['type']
+
     all_cost_types = set(vulnerability_files(oqparam.inputs))
     relevant_cost_types = all_cost_types - set(['occupants'])
     asset_refs = set()
     ignore_missing_costs = set(oqparam.ignore_missing_costs)
 
-    def asset_gen():
-        # wrap the asset generation to get a nice error message
-        with context(fname, assets_node):
-            for asset in assets_node:
-                yield asset
-
-    for asset in asset_gen():
+    for asset in assets_node:
         values = {}
         deductibles = {}
         insurance_limits = {}
@@ -759,7 +759,7 @@ def get_exposure(oqparam):
         area = float(asset.attrib.get('area', 1))
         ass = workflows.Asset(
             asset_id, taxonomy, number, location, values, area,
-            deductibles, insurance_limits, retrofitting_values, aggregated)
+            deductibles, insurance_limits, retrofitting_values, cc)
         exposure.assets.append(ass)
         exposure.taxonomies.add(taxonomy)
     if region:
@@ -809,8 +809,8 @@ def get_sitecol_assets(oqparam, exposure):
     mesh = geo.Mesh(numpy.array(lons), numpy.array(lats))
     sitecol = get_site_collection(oqparam, mesh)
     assets_by_site = []
-    for s in sitecol:
-        assets = assets_by_loc[s.location.longitude, s.location.latitude]
+    for lonlat in zip(sitecol.lons, sitecol.lats):
+        assets = assets_by_loc[lonlat]
         assets_by_site.append(sorted(assets, key=operator.attrgetter('id')))
     return sitecol, numpy.array(assets_by_site)
 

@@ -4,8 +4,8 @@ import numpy
 from openquake.baselib.general import writetmp
 from openquake.commonlib import readinput, readers
 from openquake.risklib import riskinput
-from openquake.commonlib.calculators import event_based
-from openquake.commonlib.tests.calculators import get_datastore
+from openquake.calculators import event_based
+from openquake.calculators.tests import get_datastore
 from openquake.qa_tests_data.event_based_risk import case_2
 
 
@@ -35,12 +35,12 @@ class RiskInputTestCase(unittest.TestCase):
 
     def test_assetcol(self):
         expected = writetmp('''\
-asset_ref:|S20:,site_id:uint32:,taxonomy:uint32:,fatalities:float64:,structural:float64:,deductible~structural:float64:,insurance_limit~structural:float64:
-a0,0,0,10,3000,25,100
-a1,1,0,20,2000,0.1,0.2
-a2,2,0,30,1000,0.02,0.08
-a3,2,0,0,5000,1000,3000
-a4,3,0,50,500000,1000,3000
+asset_ref:|S100:,site_id:uint32:,taxonomy:uint32:,fatalities:float64:,structural:float64:,deductible~structural:float64:,insurance_limit~structural:float64:
+a0,0,0,10,3000,.25,1.0
+a1,1,0,20,2000,0.25,0.5
+a2,2,0,30,1000,0.2,0.8
+a3,2,0,0,5000,2.0,6.0
+a4,3,0,50,500000,2.0,6.0
 ''')
         assetcol = riskinput.build_asset_collection(self.assets_by_site)
         numpy.testing.assert_equal(
@@ -94,7 +94,8 @@ a4,3,0,50,500000,1000,3000
             self.sitecol, ses_ruptures, gsims_by_trt_id, oq.truncation_level,
             correl_model, eps_dict, 1)
 
-        assets, hazards, epsilons = ri.get_all(rlzs_assoc, self.assets_by_site)
+        assets, hazards, epsilons = ri.get_all(
+            rlzs_assoc, self.assets_by_site, eps_dict)
         self.assertEqual([a.id for a in assets],
                          [b'a0', b'a1', b'a2', b'a3', b'a4'])
         self.assertEqual(set(a.taxonomy for a in assets),

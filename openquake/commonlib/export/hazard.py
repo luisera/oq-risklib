@@ -27,6 +27,7 @@ from openquake.baselib.general import AccumDict, groupby, humansize
 from openquake.hazardlib.imt import from_string
 from openquake.hazardlib.site import FilteredSiteCollection
 from openquake.commonlib.export import export
+from openquake.commonlib.oqvalidation import OqParam
 from openquake.commonlib.writers import (
     scientificformat, floatformat, write_csv)
 from openquake.commonlib import hazard_writers
@@ -76,7 +77,7 @@ def export_ses_xml(ekey, dstore):
     :param dstore: datastore object
     """
     fmt = ekey[-1]
-    oq = dstore['oqparam']
+    oq = OqParam.from_(dstore.attrs)
     try:
         csm_info = dstore['rlzs_assoc'].csm_info
     except AttributeError:  # for scenario calculators don't export
@@ -133,10 +134,10 @@ class GmfSet(object):
     """
     Small wrapper around the list of Gmf objects associated to the given SES.
     """
-    def __init__(self, gmfset, investigation_time):
+    def __init__(self, gmfset, investigation_time, ses_idx):
         self.gmfset = gmfset
         self.investigation_time = investigation_time
-        self.stochastic_event_set_id = 1
+        self.stochastic_event_set_id = ses_idx
 
     def __iter__(self):
         return iter(self.gmfset)
@@ -151,6 +152,14 @@ class GmfSet(object):
                 self.investigation_time,
                 self.stochastic_event_set_id, '\n'.join(
                     sorted(str(g) for g in self.gmfset))))
+
+
+def get_ses_idx(tag):
+    """
+    >>> get_ses_idx("col=00~ses=0007~src=1-3~rup=018-01")
+    7
+    """
+    return int(tag.split('~')[1][4:])
 
 
 class GroundMotionField(object):
@@ -216,13 +225,13 @@ class GmfCollection(object):
     def __init__(self, sitecol, ruptures, gmfs, investigation_time):
         self.sitecol = sitecol
         self.ruptures = ruptures
-        self.imts = list(gmfs[0].dtype.fields)
+        self.imts = sorted(gmfs[0].dtype.fields)
         self.gmfs_by_imt = {imt: [gmf[imt] for gmf in gmfs]
                             for imt in self.imts}
         self.investigation_time = investigation_time
 
     def __iter__(self):
-        gmfset = []
+        gmfset = collections.defaultdict(list)
         for imt_str in self.imts:
             gmfs = self.gmfs_by_imt[imt_str]
             imt, sa_period, sa_damping = from_string(imt_str)
@@ -233,14 +242,17 @@ class GmfCollection(object):
                                else rupture.indices)
                     sites = FilteredSiteCollection(
                         indices, self.sitecol)
+                    ses_idx = get_ses_idx(rupture.tag)
                 else:  # scenario
                     sites = self.sitecol
+                    ses_idx = 1
                 nodes = (GroundMotionFieldNode(gmv, site.location)
                          for site, gmv in zip(sites, gmf))
-                gmfset.append(
+                gmfset[ses_idx].append(
                     GroundMotionField(
                         imt, sa_period, sa_damping, rupture.tag, nodes))
-        yield GmfSet(gmfset, self.investigation_time)
+        for ses_idx in sorted(gmfset):
+            yield GmfSet(gmfset[ses_idx], self.investigation_time, ses_idx)
 
 
 def export_gmf_xml(key, export_dir, fname, sitecol, ruptures, gmfs, rlz,
@@ -382,7 +394,7 @@ def export_hcurves_csv(ekey, dstore):
     :param ekey: export key, i.e. a pair (datastore key, fmt)
     :param dstore: datastore object
     """
-    oq = dstore['oqparam']
+    oq = OqParam.from_(dstore.attrs)
     rlzs_assoc = dstore['rlzs_assoc']
     sitecol = dstore['sitecol']
     key, fmt = ekey
@@ -409,7 +421,7 @@ def export_gmf(ekey, dstore):
     rlzs_assoc = dstore['rlzs_assoc']
     rupture_by_tag = sum(dstore['sescollection'], AccumDict())
     all_tags = dstore['tags'].value
-    oq = dstore['oqparam']
+    oq = OqParam.from_(dstore.attrs)
     investigation_time = (None if oq.calculation_mode == 'scenario'
                           else oq.investigation_time)
     samples = oq.number_of_logic_tree_samples

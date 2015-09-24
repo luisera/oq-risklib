@@ -32,9 +32,6 @@ def export(calc_id, datastore_key, format='csv', export_dir='.'):
     logging.basicConfig(level=logging.INFO)
     dstore = datastore.DataStore(calc_id)
     dstore.export_dir = export_dir
-    hc_id = dstore['oqparam'].hazard_calculation_id
-    if hc_id:
-        dstore.parent = datastore.DataStore(hc_id)
     with performance.Monitor('export', measuremem=True) as mon:
         for fmt in format.split(','):
             fnames = export_((datastore_key, fmt), dstore)

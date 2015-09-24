@@ -18,7 +18,9 @@
 
 import os
 import re
+import ast
 import shutil
+import logging
 from openquake.baselib.python3compat import pickle
 import collections
 
@@ -111,28 +113,33 @@ class Hdf5Dataset(object):
     :param hdf5: a h5py.File object
     :param key: an hdf5 key string
     :param dtype: dtype of the dataset (usually composite)
-    :param size: size of the dataset (if None, the dataset is extendable)
+    :param shape: shape of the dataset (if None, the dataset is extendable)
     """
-    def __init__(self, hdf5, key, dtype, size):
+    def __init__(self, hdf5, key, dtype, shape):
         self.hdf5 = hdf5
         self.key = key
         self.dtype = dtype
-        if size is None:  # extendable dataset
+        if shape is None:  # extendable dataset
             self.dset = self.hdf5.create_dataset(
                 key, (0,), dtype, chunks=True, maxshape=(None,))
             self.size = 0
             self.dset.attrs['nbytes'] = 0
-        else:  # fixed-size dataset
-            self.dset = self.hdf5.create_dataset(key, (size,), dtype)
-            self.size = size
-            self.dset.attrs['nbytes'] = size * numpy.zeros(1, dtype).nbytes
+        else:  # fixed-shape dataset
+            if isinstance(shape, tuple):
+                n = numpy.prod(shape)
+            else:  # integer shape
+                n = shape
+                shape = (n,)
+            self.dset = self.hdf5.create_dataset(key, shape, dtype)
+            self.size = n
+            self.dset.attrs['nbytes'] = n * numpy.zeros(1, dtype).nbytes
         self.attrs = self.dset.attrs
 
     def extend(self, array):
         """
         Extend the dataset with the given array, which must have
         the expected dtype. This method will give an error if used
-        with a fixed-size dataset.
+        with a fixed-shape dataset.
         """
         newsize = self.size + len(array)
         self.dset.resize((newsize,))
@@ -168,7 +175,7 @@ class DataStore(collections.MutableMapping):
     lexicographically according to their name.
     """
     def __init__(self, calc_id=None, datadir=DATADIR, parent=(),
-                 export_dir='.'):
+                 export_dir='.', params=()):
         if not os.path.exists(datadir):
             os.makedirs(datadir)
         if calc_id is None:  # use a new datastore
@@ -191,6 +198,24 @@ class DataStore(collections.MutableMapping):
         self.hdf5path = os.path.join(self.calc_dir, 'output.hdf5')
         mode = 'r+' if os.path.exists(self.hdf5path) else 'w'
         self.hdf5 = h5py.File(self.hdf5path, mode, libver='latest')
+        self.attrs = self.hdf5.attrs
+        for name, value in params:
+            self.attrs[name] = value
+        if not parent and 'hazard_calculation_id' in self.attrs:
+            parent_id = ast.literal_eval(self.attrs['hazard_calculation_id'])
+            if parent_id:
+                self.parent = self.__class__(parent_id)
+
+    def set_parent(self, parent):
+        """
+        Give a parent to a datastore and update its .attrs with the parent
+        attributes, which are assumed to be literal strings.
+        """
+        self.parent = parent
+        # merge parent attrs into child attrs
+        for name, value in self.parent.attrs.items():
+            if name not in self.attrs:  # add missing parameter
+                self.attrs[name] = value
 
     def create_dset(self, key, dtype, size=None):
         """
@@ -235,9 +260,13 @@ class DataStore(collections.MutableMapping):
         if hasattr(os, 'symlink'):  # Unix, Max
             link_name = os.path.join(
                 self.datadir, name.strip('/').replace('/', '-')) + '.hdf5'
-            if os.path.exists(link_name):
-                os.remove(link_name)
-            os.symlink(self.hdf5path, link_name)
+            try:
+                if os.path.exists(link_name):
+                    os.remove(link_name)
+                os.symlink(self.hdf5path, link_name)
+            except OSError as err:
+                # this is not an issue
+                logging.info('Could not create symlink %s: %s', link_name, err)
 
     def clear(self):
         """Remove the datastore from the file system"""
@@ -270,9 +299,10 @@ class DataStore(collections.MutableMapping):
                 try:
                     val = self.parent.hdf5[key]
                 except KeyError:
-                    raise KeyError(key)
+                    raise KeyError(
+                        'No %r found in %s' % (key, [self, self.parent]))
             else:
-                raise KeyError(key)
+                raise KeyError('No %r found in %s' % (key, self))
         try:
             shape = val.shape
         except AttributeError:  # val is a group
@@ -317,6 +347,15 @@ class DataStore(collections.MutableMapping):
 
     def __repr__(self):
         return '<%s %d>' % (self.__class__.__name__, self.calc_id)
+
+
+class Fake(dict):
+    """
+    A fake datastore as a dict subclass, useful in tests and such
+    """
+    def __init__(self, attrs, **kwargs):
+        self.attrs = {k: repr(v) for k, v in attrs.items()}
+        self.update(kwargs)
 
 
 def persistent_attribute(key):

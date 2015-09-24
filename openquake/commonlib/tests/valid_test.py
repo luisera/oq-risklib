@@ -1,3 +1,4 @@
+# -*- encoding: utf-8 -*-
 import unittest
 from openquake.hazardlib import imt
 from openquake.commonlib import valid
@@ -5,6 +6,24 @@ from openquake.commonlib import valid
 
 class ValidationTestCase(unittest.TestCase):
     # more is done in the doctests inside commonlib.valid
+
+    def test_simple_id(self):
+        self.assertEqual(valid.simple_id('0'), '0')
+        self.assertEqual(valid.simple_id('1-0'), '1-0')
+        self.assertEqual(valid.simple_id('a_x'), 'a_x')
+        with self.assertRaises(ValueError) as ctx:
+            valid.simple_id('a x')
+        self.assertEqual(
+            str(ctx.exception),
+            "Invalid ID 'a x': the only accepted chars are a-zA-Z0-9_-")
+        with self.assertRaises(ValueError):
+            valid.simple_id('0|1')
+        with self.assertRaises(ValueError):
+            valid.simple_id('à')
+        with self.assertRaises(ValueError):
+            valid.simple_id('\t')
+        with self.assertRaises(ValueError):
+            valid.simple_id('a' * 101)
 
     def test_name(self):
         self.assertEqual(valid.name('x'), 'x')
@@ -15,8 +34,7 @@ class ValidationTestCase(unittest.TestCase):
 
     def test_namelist(self):
         self.assertEqual(valid.namelist('x y'), ['x', 'y'])
-        with self.assertRaises(ValueError):
-            valid.namelist('')
+        self.assertEqual(valid.namelist(' '), [])
         with self.assertRaises(ValueError):
             valid.namelist('x 1')
 
@@ -95,5 +113,8 @@ class ValidationTestCase(unittest.TestCase):
             def __repr__(self):
                 return '<FakeGsim(%s)>' % self.arg
         valid.GSIM['FakeGsim'] = FakeGsim
-        gsim = valid.gsim('FakeGsim(0.1)')
-        self.assertEqual(repr(gsim), '<FakeGsim(0.1)>')
+        try:
+            gsim = valid.gsim('FakeGsim', arg='0.1')
+            self.assertEqual(repr(gsim), '<FakeGsim(0.1)>')
+        finally:
+            del valid.GSIM['FakeGsim']
