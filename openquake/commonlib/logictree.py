@@ -434,21 +434,24 @@ class BaseLogicTree(with_metaclass(abc.ABCMeta)):
 
     _xmlschema = None
 
-    def __init__(self, filename, validate=True,
-                 seed=0, num_samples=0):
-        self.filename = filename
-        self.basepath = os.path.dirname(filename)
+    def __init__(self, seed=0, num_samples=0):
+        self.filename = ''
+        self.basepath = ''
         self.seed = seed
         self.num_samples = num_samples
         self.branches = {}
         self.open_ends = set()
+        self.root_branchset = None
+
+    def _load_lt_file(self, filename, validate=True):
+        self.filename = filename
+        self.basepath = os.path.dirname(filename)
         try:
             tree = parse(filename)
         except etree.ParseError as exc:
             # Wrap etree parsing exception to :exc:`ParsingError`.
             raise ParsingError(self.filename, str(exc))
         [tree] = tree.findall('{%s}logicTree' % self.NRML)
-        self.root_branchset = None
         self.parse_tree(tree, validate)
 
     def skip_branchset_condition(self, attrs):
