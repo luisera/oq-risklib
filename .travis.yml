@@ -21,4 +21,5 @@ install:
   - python setup.py develop
 
 script:
+  - nosetests -v -a '!slow'
   - dmesg
