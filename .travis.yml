@@ -21,4 +21,4 @@ install:
   - python setup.py develop
 
 script:
-  - nosetests --with-doctest -xv -a'!slow'
+  - nosetests -xv -a'!slow'
