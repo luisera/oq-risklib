@@ -123,6 +123,11 @@ def event_based_risk(riskinputs, riskmodel, rlzs_assoc, assets_by_site,
                   IC=square(L, R, list))
     if monitor.avg_losses:
         result['AVGLOSS'] = square(L, R, zeroN2)
+
+    avg_loss_mon = monitor('avg_loss management')
+    agg_loss_mon = monitor('agg_loss management')
+    all_loss_mon = monitor('all_loss management')
+    rcurve_mon = monitor('rcurve management')
     for out_by_rlz in riskmodel.gen_outputs(
             riskinputs, rlzs_assoc, monitor, assets_by_site, eps):
         rup_slice = out_by_rlz.rup_slice
@@ -132,69 +137,77 @@ def event_based_risk(riskinputs, riskmodel, rlzs_assoc, assets_by_site,
             asset_ids = [a.idx for a in out.assets]
 
             if monitor.asset_loss_table:
-                for rup_id, all_losses, ins_losses in zip(
-                        rup_ids, out.event_loss_per_asset,
-                        out.insured_loss_per_asset):
-                    for aid, sloss, iloss in zip(
-                            asset_ids, all_losses, ins_losses):
-                        if sloss > 0:
-                            result['SPECLOSS'].append(
-                                (rup_id, aid, (l, out.hid), (sloss, iloss)))
+                with all_loss_mon:
+                    for rup_id, all_losses, ins_losses in zip(
+                            rup_ids, out.event_loss_per_asset,
+                            out.insured_loss_per_asset):
+                        for aid, sloss, iloss in zip(
+                                asset_ids, all_losses, ins_losses):
+                            if sloss > 0:
+                                result['SPECLOSS'].append(
+                                    (rup_id, aid, (l, out.hid),
+                                     (sloss, iloss)))
 
             # collect aggregate losses
-            agg_losses = out.event_loss_per_asset.sum(axis=1)
-            agg_ins_losses = out.insured_loss_per_asset.sum(axis=1)
-            for rup_id, loss, ins_loss in zip(
-                    rup_ids, agg_losses, agg_ins_losses):
-                if loss > 0:
-                    result['AGGLOSS'][l, out.hid].append(
-                        (rup_id, numpy.array([loss, ins_loss])))
+            with agg_loss_mon:
+                agg_losses = out.event_loss_per_asset.sum(axis=1)
+                agg_ins_losses = out.insured_loss_per_asset.sum(axis=1)
+                for rup_id, loss, ins_loss in zip(
+                        rup_ids, agg_losses, agg_ins_losses):
+                    if loss > 0:
+                        result['AGGLOSS'][l, out.hid].append(
+                            (rup_id, numpy.array([loss, ins_loss])))
 
             # dictionaries asset_idx -> array of counts
             if riskmodel.curve_builders[l].user_provided:
-                result['RC'][l, out.hid].append(dict(
-                    zip(asset_ids, out.counts_matrix)))
-                if out.insured_counts_matrix.sum():
-                    result['IC'][l, out.hid].append(dict(
-                        zip(asset_ids, out.insured_counts_matrix)))
+                with rcurve_mon:
+                    result['RC'][l, out.hid].append(dict(
+                        zip(asset_ids, out.counts_matrix)))
+                    if out.insured_counts_matrix.sum():
+                        result['IC'][l, out.hid].append(dict(
+                            zip(asset_ids, out.insured_counts_matrix)))
 
             # average losses
             if monitor.avg_losses:
-                arr = numpy.zeros((monitor.num_assets, 2))
-                for aid, avgloss, ins_avgloss in zip(
-                        asset_ids, out.average_losses,
-                        out.average_insured_losses):
-                    # NB: here I cannot use numpy.float32, because the sum of
-                    # numpy.float32 numbers is noncommutative!
-                    # the net effect is that the final loss is affected by
-                    # the order in which the tasks are run, which is random
-                    # i.e. at each run one may get different results!!
-                    arr[aid] = [avgloss, ins_avgloss]
-                result['AVGLOSS'][l, out.hid] += arr
+                with avg_loss_mon:
+                    arr = numpy.zeros((monitor.num_assets, 2))
+                    for aid, avgloss, ins_avgloss in zip(
+                            asset_ids, out.average_losses,
+                            out.average_insured_losses):
+                        # NB: here I cannot use numpy.float32, because the sum
+                        # of numpy.float32 numbers is noncommutative!
+                        # the net effect is that the final loss is affected by
+                        # the order in which the tasks are run, which is random
+                        # i.e. at each run one may get different results!!
+                        arr[aid] = [avgloss, ins_avgloss]
+                    result['AVGLOSS'][l, out.hid] += arr
 
-    for (l, r), lst in numpy.ndenumerate(result['AGGLOSS']):
-        # aggregate the losses corresponding to the same rupture
-        if lst:
-            acc = collections.Counter()
-            for rupid, loss in lst:
-                acc[rupid] += loss
-            # h5py wants sorted array indices
-            array = numpy.array(sorted(acc.items()), elt_dt)
-            result['AGGLOSS'][l, r] = [array]
+    with agg_loss_mon:
+        for (l, r), lst in numpy.ndenumerate(result['AGGLOSS']):
+            # aggregate the losses corresponding to the same rupture
+            if lst:
+                acc = collections.Counter()
+                for rupid, loss in lst:
+                    acc[rupid] += loss
+                # h5py wants sorted array indices
+                array = numpy.array(sorted(acc.items()), elt_dt)
+                result['AGGLOSS'][l, r] = [array]
 
     if monitor.asset_loss_table:
-        items = []
-        for (rid, aid), group in itertools.groupby(
-                sorted(result['SPECLOSS']), operator.itemgetter(0, 1)):
-            array = numpy.zeros((L, R, 2), F32)
-            for _rid, _aid, lr, loss in group:
-                array[lr] = loss
-            items.append((rid, aid, array))
-        result['SPECLOSS'] = numpy.array(items, ela_dt)
-    for (l, r), lst in numpy.ndenumerate(result['RC']):
-        result['RC'][l, r] = sum(lst, AccumDict())
-    for (l, r), lst in numpy.ndenumerate(result['IC']):
-        result['IC'][l, r] = sum(lst, AccumDict())
+        with all_loss_mon:
+            items = []
+            for (rid, aid), group in itertools.groupby(
+                    sorted(result['SPECLOSS']), operator.itemgetter(0, 1)):
+                array = numpy.zeros((L, R, 2), F32)
+                for _rid, _aid, lr, loss in group:
+                    array[lr] = loss
+                items.append((rid, aid, array))
+            result['SPECLOSS'] = numpy.array(items, ela_dt)
+    with rcurve_mon:
+        for (l, r), lst in numpy.ndenumerate(result['RC']):
+            result['RC'][l, r] = sum(lst, AccumDict())
+        for (l, r), lst in numpy.ndenumerate(result['IC']):
+            result['IC'][l, r] = sum(lst, AccumDict())
 
     return result
 
